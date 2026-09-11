@@ -11,13 +11,14 @@
   "cannot resolve symbol" —— 这是**故意的**，不是缺 JDK。
 - 本工具**从不编译 Java**，只把源码当文本解析，这些红杠不影响核对结果。
 
-## 嫌 IDE 报错烦？本目录已排除
+## 嫌 IDE 报错烦？本目录已停止 Java 分析
 
-仓库根的 `.vscode/settings.json` 已经把它排除掉（`java.import.exclusions` +
-`files.exclude`），用 VS Code 打开仓库不会再报错，也不会在文件树里碍眼。
+仓库根的 `.vscode/settings.json` 配了 `java.import.exclusions`：用 VS Code 打开
+仓库时，Java 语言服务不会分析本目录 —— **文件照常显示在文件树里，但不会报红**。
 
 - **IntelliJ IDEA**：右键 `examples/code` → Mark Directory as → **Excluded**
-- 其它编辑器同理，把 `examples/` 排除出索引即可。
+  （IntelliJ 的"排除"会连显示一起隐藏，这是它和 VS Code 的区别）
+- 其它编辑器同理，把 `examples/` 排除出 Java 索引即可。
 
 跑演示时仍然照常用它：
 
