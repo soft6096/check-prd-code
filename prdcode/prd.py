@@ -12,6 +12,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 from typing import Iterable
+from urllib.parse import unquote
 
 from .utils import read_text
 
@@ -23,6 +24,8 @@ _LIST_RE = re.compile(r"^(\s*)([-*+]|\d{1,3}[.)])\s+\S")
 _TABLE_SEP_RE = re.compile(r"^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$")
 # 围栏代码块
 _FENCE_RE = re.compile(r"^\s*(```|~~~)")
+# 图片引用：![alt](path)
+_IMG_REF_RE = re.compile(r"!\[[^\]]*\]\(\s*([^)\s]+)")
 
 # 这些标题下面的内容，基本不是"要实现的规则"，先标出来给模型参考
 _NON_REQ_HINTS = (
@@ -115,6 +118,7 @@ def split_prd(
             for sub_start, sub_end in _split_long(chunk, max_block_lines):
                 seq += 1
                 body = lines[i + sub_start : i + sub_end]
+                text = "\n".join(body).strip("\n")
                 blocks.append(
                     {
                         "id": f"B{seq:04d}",
@@ -123,7 +127,8 @@ def split_prd(
                         "end_line": i + sub_end,
                         "heading": list(heading),
                         "kind": kind,
-                        "text": "\n".join(body).strip("\n"),
+                        "text": text,
+                        "images": extract_images(text),
                         "likely_requirement": _likely_requirement(kind, heading),
                     }
                 )
@@ -256,14 +261,32 @@ def _split_long(chunk: list[str], max_lines: int) -> list[tuple[int, int]]:
     return result or [(0, len(chunk))]
 
 
+def extract_images(text: str) -> list[str]:
+    """把块里的图片引用抽出来，路径做 URL 解码。
+
+    Markdown 里的图片路径常常是 URL 编码的（``image%2020.png``），
+    直接拿去当文件名会找不到文件。
+    """
+    out: list[str] = []
+    for raw in _IMG_REF_RE.findall(text or ""):
+        path = unquote(raw.strip())
+        if path and path not in out:
+            out.append(path)
+    return out
+
+
 def _likely_requirement(kind: str, heading: list[str]) -> bool:
-    """粗判这块内容像不像"要实现的规则"。只是给模型的提示，不丢内容。"""
+    """粗判这块内容像不像"要实现的规则"。只是给模型的提示，不丢内容。
+
+    只看**最近一级标题**。有些文档把全部内容都挂在「文档概述」底下，
+    这时候按整条标题路径去匹配，会把整篇文档判成背景。
+    """
     if kind == "heading":
         return False
-    joined = " ".join(heading)
-    if any(hint in joined for hint in _NON_REQ_HINTS):
-        return False
-    return True
+    leaf = heading[-1] if heading else ""
+    if not leaf:
+        return True
+    return not any(hint in leaf for hint in _NON_REQ_HINTS)
 
 
 # ---------------------------------------------------------------- 渲染
