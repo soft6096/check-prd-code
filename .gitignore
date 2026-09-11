@@ -1,0 +1,19 @@
+# 运行产物：中间数据、任务包、进度，都不要提交
+.checkprd/
+
+# 报告默认输出
+01-待修复.md
+02-待确认.md
+/报告/
+
+# 你自己的输入不要提交
+# prd/
+# code/
+
+# 系统与缓存
+.DS_Store
+Thumbs.db
+__pycache__/
+*.pyc
+.idea/
+.vscode/

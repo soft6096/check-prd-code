@@ -1,0 +1,74 @@
+[
+  {
+    "id": "R-001",
+    "group": "撤销退款",
+    "kind": "behavior",
+    "assertion": "退款申请必须按批次整批原子撤销，本批次之外的单子不能撤",
+    "source": { "file": "需求文档.md", "line": 11 },
+    "text": "退款申请必须按批次整批原子撤销，本批次之外的单子不能撤。",
+    "note": ""
+  },
+  {
+    "id": "R-002",
+    "group": "撤销退款",
+    "kind": "existence",
+    "assertion": "撤销接口 POST /refund/withdraw 存在",
+    "source": { "file": "需求文档.md", "line": 12 },
+    "text": "撤销接口 `POST /refund/withdraw` 的入参必填 `refundBatchNo`。",
+    "note": ""
+  },
+  {
+    "id": "R-003",
+    "group": "提交退款申请",
+    "kind": "behavior",
+    "assertion": "同一个 requestNo 重复提交要返回上一次的结果，不能重复建单",
+    "source": { "file": "需求文档.md", "line": 18 },
+    "text": "同一个 `requestNo` 重复提交要返回上一次的结果，不能重复建单。",
+    "note": ""
+  },
+  {
+    "id": "R-004",
+    "group": "退款详情",
+    "kind": "behavior",
+    "assertion": "refundStatusName 要返回中文名，不是编码",
+    "source": { "file": "需求文档.md", "line": 23 },
+    "text": "字段 `refundStatusName` 要返回中文名，不是编码。",
+    "note": ""
+  },
+  {
+    "id": "R-005",
+    "group": "退款详情",
+    "kind": "behavior",
+    "assertion": "只有 SHIPPED 状态才返回退货地址和截止时间",
+    "source": { "file": "需求文档.md", "line": 24 },
+    "text": "只有 `SHIPPED` 状态才返回退货地址和截止时间。",
+    "note": ""
+  },
+  {
+    "id": "R-006",
+    "group": "退款详情",
+    "kind": "existence",
+    "assertion": "详情接口 GET /refund/detail/{refundId} 存在",
+    "source": { "file": "需求文档.md", "line": 22 },
+    "text": "详情只返回本人的退款单。",
+    "note": ""
+  },
+  {
+    "id": "R-007",
+    "group": "分页",
+    "kind": "behavior",
+    "assertion": "订单退款列表单页最大 100 条",
+    "source": { "file": "需求文档.md", "line": 30 },
+    "text": "订单退款列表单页最大 100 条。",
+    "note": ""
+  },
+  {
+    "id": "R-008",
+    "group": "撤销退款",
+    "kind": "existence",
+    "assertion": "撤销批次记录表 refund_batch_log 存在",
+    "source": { "file": "需求文档.md", "line": 13 },
+    "text": "撤销后用户可以重新发起申请。",
+    "note": "测试：一条确实不存在的标识符"
+  }
+]
