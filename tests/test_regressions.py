@@ -1,4 +1,4 @@
-"""回归测试：锁定已修复的 6 个缺陷，防止以后改回去。
+"""回归测试：锁定已修复的 7 个缺陷，防止以后改回去。
 
 只用标准库，不引入任何依赖。在仓库根目录执行：
 
@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -207,6 +208,40 @@ class TestPathSandbox(unittest.TestCase):
             [{"file": "../../etc/passwd", "line": 1, "quote": "root"}], self.root
         )
         self.assertTrue(any("越界" in p for p in problems))
+
+
+class TestEvidenceQuoteIntegrity(unittest.TestCase):
+    """bug7：多行引用必须逐行真实，禁止"真一行 + 编造若干行"混过验真。"""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        (self.root / "Foo.java").write_text(
+            "line1\nline2\nbatch.closeAll();\n", encoding="utf-8"
+        )
+
+    def _verify(self, quote: str, line: int) -> list[str]:
+        """对一段引用跑验真，返回问题清单（空=通过）。"""
+        return tasks.verify_evidence(
+            [{"file": "Foo.java", "line": line, "quote": quote}], self.root
+        )
+
+    def test_single_real_line_passes(self) -> None:
+        """单行引用命中窗口：通过。"""
+        self.assertEqual(self._verify("batch.closeAll();", 3), [])
+
+    def test_contiguous_multiline_block_passes(self) -> None:
+        """真实连续的多行引用：通过。"""
+        self.assertEqual(self._verify("line2\nbatch.closeAll();", 2), [])
+
+    def test_fabricated_line_in_multiline_rejected(self) -> None:
+        """多行里夹带一行编造代码：必须被打回。"""
+        self.assertTrue(self._verify("batch.closeAll();\nthis.doesNotExist();", 3))
+
+    def test_fully_fabricated_multiline_rejected(self) -> None:
+        """整段编造：打回。"""
+        self.assertTrue(self._verify("this.a();\nthis.b();", 3))
 
 
 if __name__ == "__main__":

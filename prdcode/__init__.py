@@ -11,9 +11,10 @@ AI 说出的每个结论，脚本都要回头验一遍。
 
 __version__ = "0.1.0"
 
-# 三个阶段的名字，命令行与进度文件都用这一套
+# 各个阶段的名字，命令行与进度文件都用这一套
 STAGE_EXTRACT = "extract"
 STAGE_COMPARE = "compare"
+STAGE_VERIFY = "verify"
 STAGE_REPORT = "report"
 
 # 中间产物统一放在这个目录

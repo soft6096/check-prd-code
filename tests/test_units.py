@@ -229,6 +229,15 @@ class TestReportRender(unittest.TestCase):
             report.is_confirm({"verdict": "undecidable", "checked_by": "AI（已验真）"})
         )
 
+    def test_sample_gate_warning(self) -> None:
+        """抽查必须作为 01-待修复 的可信度闸门显式提示。"""
+        records = [self._record("missing", "缺失项"), self._record("implemented", "已实现项")]
+        out = Path(self.tmp.name) / "out2"
+        fix, _ = report.render_reports(records, [], out, self.root)
+        text = fix.read_text(encoding="utf-8")
+        self.assertIn("先抽查", text)
+        self.assertIn("可信度闸门", text)
+
 
 class TestIndexCache(unittest.TestCase):
     """索引缓存：指纹没变复用，源码变了重扫。"""

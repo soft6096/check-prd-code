@@ -21,8 +21,8 @@ from .utils import read_text, resolve_within, write_text
 FIX_NAME = "01-待修复.md"
 CONFIRM_NAME = "02-待确认.md"
 
-# 抽查抽查几条
-SAMPLE_SIZE = 6
+# 抽查条数：判为「已实现」的要随机抽出来给人复核，抽得越多越能发现假实现
+SAMPLE_SIZE = 20
 
 
 # ---------------------------------------------------------------- 判定取舍
@@ -33,14 +33,18 @@ def is_fix(record: dict) -> bool:
 
 
 def is_confirm(record: dict) -> bool:
-    """要不要进「待确认」：既不是"确定没问题"，也不是"确定要改"。"""
-    if record.get("verdict") == "implemented":
-        return False
-    return not is_fix(record)
+    """要不要进「待确认」：既不是"确定没问题"，也不是"确定要改"。
+
+    这里**不能**图省事写成"verdict 是 implemented 就排除"：对抗复核可能把一条
+    原判「已实现」的记录降级成待确认，那样它就会被两边同时漏掉、从报告里消失。
+    统一走 classify，复核写入的 ``forced_placement`` 才会被认到。
+    """
+    return classify(record) == "confirm"
 
 
 def is_ok(record: dict) -> bool:
-    return record.get("verdict") == "implemented"
+    """是不是确定没问题（可进 01 的抽查、不进 02）。"""
+    return classify(record) == "ok"
 
 
 # ---------------------------------------------------------------- 主入口
@@ -89,6 +93,9 @@ def _render_fix(
     out.append("# 待修复")
     out.append("")
     out.append("这份是核实过、可以直接改的。每条都给了需求出处和代码位置，照着改就行。")
+    out.append("")
+    out.append("> **动手前先抽查。** 文末「抽查」一节随机抽了若干条判为「已实现」的，")
+    out.append("> 附上需求原话和代码原文。只要有一条对不上，这份报告就不可信 —— 先别照着改。")
     out.append("")
     out.append("改完重跑一次核对，这里的条目应该会消失。如果没消失，说明改的位置不对。")
     out.append("")
@@ -224,8 +231,8 @@ def _render_sample(ok: list[dict], code_root: Path, size: int) -> str:
     lines = [
         "## 抽查",
         "",
-        "下面几行是随机抽出来的、判定为「已经实现」的条目，附上需求原话和代码实际内容。",
-        "如果这里出现对不上的，说明这份报告不可信，那就先别照着改。",
+        "随机抽出的、判定为「已实现」的条目，附需求原话和代码实际内容，供人肉复核。",
+        "**这是本报告的可信度闸门**：只要有一条对不上，说明 `01-待修复` 也不可信，先别照着改。",
         "",
     ]
     for r in sample:
@@ -248,6 +255,12 @@ def _render_limits(records: list[dict]) -> str:
         if str(r.get("checked_by", "")).startswith("AI") and r.get("verify_problems")
     ]
     pending = [r for r in records if r.get("checked_by") == "待处理"]
+    # 对抗复核把原本要进 01 的结论降了级：这条要单独说，否则人不知道为何少了条目
+    demoted = [
+        r for r in records
+        if isinstance(r.get("recheck"), dict)
+        and r["recheck"].get("second_verdict") not in (None, "", "confirmed")
+    ]
 
     lines = [
         "## 这次没查什么",
@@ -266,6 +279,10 @@ def _render_limits(records: list[dict]) -> str:
         lines.append(
             f"- 有 {len(pending)} 条还没被 AI 处理（任务包未回填），"
             f"已全部转入 `{CONFIRM_NAME}`"
+        )
+    if demoted:
+        lines.append(
+            f"- 有 {len(demoted)} 条原判「已实现/偏离」经对抗复核被降级为待确认"
         )
     return "\n".join(lines)
 
@@ -348,6 +365,23 @@ def _render_confirm_item(index: int, r: dict, code_root: Path) -> str:
     lines = [f"### {index}. {r['assertion']}", ""]
     lines.append(f"需求出处：{_src_ref(r)}")
     lines.append("")
+
+    # 对抗复核把原判「已实现 / 已偏离」降了级：先说清楚为什么，再列复核引用的反证代码
+    recheck = r.get("recheck") or {}
+    if recheck.get("second_verdict") and recheck.get("second_verdict") != "confirmed":
+        lines.append("对抗复核认为原判定不成立/不充分。")
+        lines.append("")
+        if recheck.get("reason"):
+            lines.append(recheck["reason"])
+            lines.append("")
+        quote = _recheck_first_quote(recheck)
+        if quote:
+            lines.append("对抗复核引用的代码：")
+            lines.append("")
+            lines.append("```java")
+            lines.append(quote)
+            lines.append("```")
+            lines.append("")
 
     bounced = bool(r.get("verify_problems"))
     if r.get("checked_by") == "待处理":
@@ -444,6 +478,15 @@ def _pos_ref(r: dict) -> str:
 
 def _first_quote(r: dict) -> str:
     for ev in r.get("evidence") or []:
+        q = (ev.get("quote") or "").strip()
+        if q:
+            return q
+    return ""
+
+
+def _recheck_first_quote(recheck: dict) -> str:
+    """取复核结果里的第一条引用，作为"打脸"证据展示给人看。"""
+    for ev in recheck.get("evidence") or []:
         q = (ev.get("quote") or "").strip()
         if q:
             return q

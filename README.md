@@ -100,9 +100,14 @@ python3 check_prd_code.py report --code ./你的工程 --out ./报告
 `extract` 跑完会**停住**，把任务包分成两批等你：
 
 ```
-图片批   .checkprd/extract/任务/图片/   ← 切到多模态模型
-文本批   .checkprd/extract/任务/文本/   ← 切到普通模型
+图片批   .checkprd/extract/任务/图片/   ← 切到【能看图的模型】
+          参考：GLM-5v-Turbo、GPT-4o、Claude Sonnet、Qwen-VL
+文本批   .checkprd/extract/任务/文本/   ← 切到【便宜的文本模型】
+          参考：GLM-5.3-Flash、DeepSeek、GPT-4o-mini
 ```
+
+**怎么判断自己的模型行不行**：图片批只需要问一句——**这个模型能不能直接读图片文件？**
+读不了就别用它跑图片批。看不到图，模型只能照着标题瞎猜，产出的条目全废。
 
 **为什么要拆开跑**：页面原型图里，文字描述往往只写一句"如下图"，
 真正的字段、按钮、状态都在图里。看不到图 = 这部分需求没读 ——

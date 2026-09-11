@@ -362,17 +362,23 @@ def verify_evidence(evidence: list[dict], code_root: Path) -> list[str]:
 
 
 def _quote_matches(quote: str, window: str) -> bool:
-    """比对引用：先原样比，再按空白归一化比。"""
+    """比对引用是否真实存在。
+
+    三级比对，由严到宽；一旦命中即通过：
+
+    1. 原样包含；
+    2. 空白归一化后包含（容忍缩进/换行差异）；
+    3. 多行引用逐行比对 —— 要求**每一行**都能在窗口里找到。
+
+    第 3 条不能放宽成"命中任意一行即可"：那等于允许模型拿一行真代码夹带
+    若干编造的行来充数，验真会形同虚设。此处由回归测试锁死，勿改回。
+    """
     if quote in window:
         return True
     if norm_ws(quote) in norm_ws(window):
         return True
-    # 允许模型只引用了其中一行
-    for line in quote.splitlines():
-        stripped = line.strip()
-        if len(stripped) >= 8 and stripped in window:
-            return True
-    return False
+    lines = [ln.strip() for ln in quote.splitlines() if ln.strip()]
+    return len(lines) >= 2 and all(ln in window for ln in lines)
 
 
 def _clip(text: str, limit: int = 60) -> str:
@@ -477,7 +483,14 @@ def classify(record: dict) -> str:
 
     进「待修复」意味着可以整份丢给 AI 直接改，所以门槛要高一点：
     脚本判的算硬结论；模型判的得看它有没有给出可核验的东西。
+
+    对抗复核（recheck）会给记录写入 ``forced_placement``，那是复核后的最终归属，
+    优先级高于这里的一切推断，必须最先认。
     """
+    forced = record.get("forced_placement")
+    if forced in ("ok", "fix", "confirm"):
+        return forced
+
     verdict = record.get("verdict", "")
     by = str(record.get("checked_by", ""))
 

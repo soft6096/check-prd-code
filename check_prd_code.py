@@ -13,6 +13,12 @@
         读条目、建代码索引、能直接判的判掉，剩下的做成"判定任务包"给 AI。
         AI 读完写成 .checkprd/compare/tasks/batch-*.json。
 
+    python3 check_prd_code.py verify --code ./你的工程      （可选）
+
+        对抗复核：把上面判成"已实现 / 已偏离"的条目挑出来，交给
+        **另一个强推理模型**专门推翻。结果写回 .checkprd/verify/tasks/。
+        不跑这一步，后面照样出报告。
+
     python3 check_prd_code.py report --code ./你的工程 --out ./报告
 
         验真、合并、出两份报告。
@@ -30,8 +36,15 @@ from pathlib import Path
 # 让脚本在任意目录下都能 import 到 prdcode
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from prdcode import STAGE_COMPARE, STAGE_EXTRACT, STAGE_REPORT, WORK_DIR_NAME, __version__
-from prdcode import codeindex, matcher, prd, report, reverse, tasks
+from prdcode import (
+    STAGE_COMPARE,
+    STAGE_EXTRACT,
+    STAGE_REPORT,
+    STAGE_VERIFY,
+    WORK_DIR_NAME,
+    __version__,
+)
+from prdcode import codeindex, matcher, prd, recheck, report, reverse, tasks
 from prdcode.codeindex import CodeIndex
 from prdcode.progress import Progress
 from prdcode.utils import read_json, read_text, write_json, write_text
@@ -133,7 +146,12 @@ def _print_extract_next(
 
     if pending_image > 0:
         print(f"① 图片批（{pending_image} 个文件待处理，共 {len(plan['image'])} 个）")
-        print(f"   必须用【能看图的模型】，例如 GLM-5v-Turbo")
+        print()
+        print(f"   >>> 请把模型切换到【能看图的模型】（多模态 / 视觉模型）")
+        print(f"       参考：GLM-5v-Turbo、GPT-4o、Claude Sonnet、Qwen-VL 等")
+        print(f"       判断标准：这个模型能不能直接读图片文件？")
+        print(f"       读不了就别用 —— 看不到图，模型只能照着标题瞎猜，条目全废。")
+        print()
         print(f"   任务： {work_label}/任务/图片/")
         print(f"   产出： {work_label}/结果/图片批-*.json")
         print(f"   注意：不是服务端的图（纯页面布局、前端交互、样式）直接跳过，")
@@ -142,10 +160,17 @@ def _print_extract_next(
 
     if pending_text > 0:
         print(f"② 文本批（{pending_text} 个文件待处理，共 {len(plan['text'])} 个）")
-        print(f"   用【普通够用便宜的模型】即可，例如 GLM-5.3-Flash")
+        print()
+        print(f"   >>> 请把模型切换到【便宜的文本模型】")
+        print(f"       参考：GLM-5.3-Flash、DeepSeek、GPT-4o-mini 等")
+        print(f"       这批是中文改写活 —— 量最大、也最简单，不值得用贵模型。")
+        print()
         print(f"   任务： {work_label}/任务/文本/")
         print(f"   产出： {work_label}/结果/文本批-*.json")
         print()
+
+    print("   （这两批之间要各切一次模型；同一批内可以连着跑完）")
+    print()
 
     print("两批都写完之后，重跑同一条命令，结果会自动合并成 items.json：")
     print(f"    python3 check_prd_code.py extract --prd <同一个 PRD>")
@@ -563,6 +588,67 @@ def cmd_compare(args: argparse.Namespace) -> None:
     progress.finish()
 
 
+# ---------------------------------------------------------------- 对抗复核（可选）
+
+def cmd_verify(args: argparse.Namespace) -> None:
+    """可选的对抗复核阶段：挑出「已实现 / 已偏离」的判定，打包交给另一个模型推翻。
+
+    跑在 compare 之后、report 之前。不跑它，report 的行为与以前完全一致。
+    """
+    work = Path(args.work)
+    code_root = Path(args.code)
+    _require(code_root, "检查一下 --code 指的路径。")
+
+    items = read_json(work / STAGE_EXTRACT / "items.json", [])
+    static_results = read_json(work / STAGE_COMPARE / "static.json", [])
+    if not items or not static_results:
+        _die(
+            "缺前置产物，请先依次跑 extract 和 compare —— "
+            "对抗复核需要 items.json、static.json 和代码索引（index.json）。"
+        )
+    index = _load_index(work)
+
+    stage_dir = work / STAGE_VERIFY
+    progress = Progress(stage_dir, STAGE_VERIFY, total_steps=3)
+
+    progress.begin("读回第一遍判定")
+    ai_results = tasks.load_results(work / STAGE_COMPARE)
+    merged = tasks.merge_results(items, static_results, ai_results, code_root)
+    progress.ok(f"{len(merged)} 条")
+
+    progress.begin("挑出需要对抗复核的条目")
+    claims = recheck.select_claims(merged)
+    if not claims:
+        progress.ok("0 条")
+        progress.waiting("没有需要对抗日核的条目")
+        progress.finish()
+        print("没有需要对抗日核的条目。")
+        return
+    progress.ok(f"{len(claims)} 条")
+
+    progress.begin("生成对抗复核任务包")
+    paths = recheck.build_recheck_packages(
+        stage_dir,
+        merged,
+        items,
+        index,
+        code_root,
+        batch_size=args.batch_size,
+        max_code_lines=args.max_code_lines,
+        work_label=f"{args.work}/{STAGE_VERIFY}",
+    )
+    progress.ok(f"{len(paths)} 批")
+
+    progress.waiting("等对抗复核模型处理 tasks/ 里的任务包")
+    progress.info("")
+    progress.info("下一步：把下面这个目录交给一个**与第一遍不同的强推理模型**")
+    progress.info(f"    {stage_dir / 'tasks'}")
+    progress.info(
+        "逐条读 batch-NNN.md，结果写回同名的 batch-NNN.json；然后跑 report。"
+    )
+    progress.finish()
+
+
 # ---------------------------------------------------------------- 第三步
 
 def cmd_report(args: argparse.Namespace) -> None:
@@ -586,6 +672,12 @@ def cmd_report(args: argparse.Namespace) -> None:
 
     progress.begin("验真与合并")
     merged = tasks.merge_results(items, static_results, ai_results, code_root)
+    # 跑过对抗复核（可选 verify 阶段）就先应用复核结论，再落盘、再出报告。
+    # 没有复核结果时 rechecks 为空，apply_recheck 原样返回，行为与以前完全一致。
+    rechecks = recheck.load_recheck_results(work / STAGE_VERIFY)
+    if rechecks:
+        windows = read_json(work / STAGE_VERIFY / "windows.json", {})
+        merged = recheck.apply_recheck(merged, rechecks, windows, code_root)
     write_json(stage_dir / "merged.json", merged)
     bounced = sum(1 for r in merged if r.get("verify_problems"))
     detail = f"{len(merged)} 条"
@@ -617,7 +709,7 @@ def cmd_report(args: argparse.Namespace) -> None:
 def cmd_status(args: argparse.Namespace) -> None:
     work = Path(args.work)
     found = False
-    for stage in (STAGE_EXTRACT, STAGE_COMPARE, STAGE_REPORT):
+    for stage in (STAGE_EXTRACT, STAGE_COMPARE, STAGE_VERIFY, STAGE_REPORT):
         path = work / stage / "进度.md"
         if path.exists():
             found = True
@@ -659,8 +751,28 @@ def build_parser() -> argparse.ArgumentParser:
     p3.add_argument("--code", required=True, help="代码根目录")
     p3.add_argument("--out", default=".", help="报告输出目录（默认当前目录）")
     p3.add_argument("--work", default=WORK_DIR_NAME, help="中间产物目录")
-    p3.add_argument("--samples", type=int, default=6, help="抽查条数（默认 6）")
+    p3.add_argument("--samples", type=int, default=20, help="抽查条数（默认 20）")
     p3.set_defaults(func=cmd_report)
+
+    p5 = sub.add_parser(
+        "verify",
+        help="可选：对抗复核（在 compare 与 report 之间，换模型专门推翻原判）",
+    )
+    p5.add_argument("--code", required=True, help="代码根目录")
+    p5.add_argument("--work", default=WORK_DIR_NAME, help="中间产物目录")
+    p5.add_argument(
+        "--batch-size",
+        type=int,
+        default=recheck.DEFAULT_RECHECK_BATCH,
+        help=f"每批复核几条（默认 {recheck.DEFAULT_RECHECK_BATCH}）",
+    )
+    p5.add_argument(
+        "--max-code-lines",
+        type=int,
+        default=recheck.DEFAULT_RECHECK_MAX_LINES,
+        help=f"每批最多给多少行共用代码（默认 {recheck.DEFAULT_RECHECK_MAX_LINES}）",
+    )
+    p5.set_defaults(func=cmd_verify)
 
     p4 = sub.add_parser("status", help="看当前跑到哪一步了")
     p4.add_argument("--work", default=WORK_DIR_NAME, help="中间产物目录")
