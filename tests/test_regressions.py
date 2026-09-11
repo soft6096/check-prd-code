@@ -121,6 +121,13 @@ class TestJavaParser(unittest.TestCase):
         self.assertEqual({f["name"] for f in syms.fields}, {"s"})
         self.assertEqual({m["name"] for m in syms.methods}, {"real"})
 
+    def test_doc_captured(self) -> None:
+        syms = javasrc.parse_java(
+            '/** 退款服务。 */ class C { /** 提交申请。 */ void apply() {} }'
+        )
+        self.assertEqual(syms.types[0]["doc"], "退款服务。")
+        self.assertEqual(syms.methods[0]["doc"], "提交申请。")
+
 
 class TestMethodCallExtraction(unittest.TestCase):
     """bug4：带参调用也要能抽出方法名。"""

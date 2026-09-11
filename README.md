@@ -139,6 +139,7 @@ prdcode/               实现
   prd.py               PRD 切块
   javasrc.py           Java 词法分析 + 结构化解析（纯标准库，不依赖 AST 库）
   codeindex.py         代码索引（Java / MyBatis XML）
+  recall.py            BM25 召回：中文需求 ↔ 代码注释/标识符（纯标准库）
   matcher.py           标识符抽取 + 静态判定 + 搜查记录
   tasks.py             AI 任务包、结果回收、引用验真
   reverse.py           反向覆盖：代码里有、需求里没提的

@@ -17,7 +17,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from prdcode import codeindex, matcher, prd, report, tasks
+from prdcode import codeindex, matcher, prd, recall, report, tasks
 from prdcode.codeindex import CodeIndex
 from prdcode.utils import find_error_codes
 
@@ -273,6 +273,79 @@ class TestErrorCodeConfig(unittest.TestCase):
         os.environ["CHECKPRD_ERROR_CODE_DIGITS"] = "4"
         self.addCleanup(os.environ.pop, "CHECKPRD_ERROR_CODE_DIGITS", None)
         self.assertEqual(find_error_codes("错误码 4001"), ["4001"])
+
+
+class TestRecall(unittest.TestCase):
+    """BM25 召回：中文注释代码 + 纯中文需求。"""
+
+    REFUND = """
+package demo;
+/** 退款服务实现。 */
+public class RefundServiceImpl {
+    /** 提交退款申请：按商品行原子拆单，失败不留半单。 */
+    public void apply(RefundDTO dto) {}
+    /** 按批次整批原子撤销退款，本批次之外的不能撤。 */
+    public void withdraw(RefundDTO dto) {}
+}
+"""
+    COUPON = """
+package demo;
+/** 优惠券服务。 */
+public class CouponServiceImpl {
+    /** 优惠券过期后必须落一条失效记录，便于对账。 */
+    public void expire(Long id) {}
+}
+"""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        (self.root / "RefundServiceImpl.java").write_text(self.REFUND, encoding="utf-8")
+        (self.root / "CouponServiceImpl.java").write_text(self.COUPON, encoding="utf-8")
+        self.index = codeindex.build_index([self.root], base=self.root)
+
+    def test_tokenize_cjk_bigram(self) -> None:
+        tokens = recall.tokenize("提交申请")
+        self.assertIn("提交", tokens)
+        self.assertIn("申请", tokens)
+
+    def test_tokenize_camel(self) -> None:
+        self.assertIn("refund", recall.tokenize("RefundApplyDTO"))
+
+    def test_ranks_correct_file(self) -> None:
+        ri = recall.RecallIndex.from_code_index(self.index)
+        hits = ri.search("提交退款申请按商品行拆单", top_k=3)
+        self.assertTrue(hits)
+        self.assertEqual(hits[0]["file"], "RefundServiceImpl.java")
+
+    def test_english_only_no_signal(self) -> None:
+        index = CodeIndex()
+        index.add_method(
+            "apply",
+            {"file": "A.java", "line": 1, "end_line": 2, "owner": "X",
+             "doc": "Submit refund application"},
+        )
+        ri = recall.RecallIndex.from_code_index(index)
+        self.assertEqual(ri.search("提交退款申请"), [])
+
+    def test_task_includes_recalled_code(self) -> None:
+        items = [
+            {
+                "id": "R-1",
+                "group": "退款",
+                "kind": "behavior",
+                "assertion": "提交退款申请按商品行原子拆单",
+                "text": "提交退款申请按商品行原子拆单，失败不留半单",
+                "source": {"file": "需求.md", "line": 1},
+            }
+        ]
+        static = [{"item_id": "R-1", "route": "ai"}]
+        work = Path(self.tmp.name) / ".checkprd"
+        paths = tasks.build_task_packages(work, items, static, self.index, self.root)
+        self.assertTrue(paths)
+        content = paths[0].read_text(encoding="utf-8")
+        self.assertIn("RefundServiceImpl.java", content)
 
 
 if __name__ == "__main__":

@@ -12,9 +12,9 @@
 
 from __future__ import annotations
 
-import re
 from pathlib import Path
 
+from . import recall
 from .codeindex import CodeIndex
 from .utils import norm_ws, read_json, read_text, resolve_within, write_json, write_text
 
@@ -39,6 +39,7 @@ def recall_for_group(
     base: Path | None,
     context: int = DEFAULT_CONTEXT_LINES,
     max_files: int = 5,
+    corpus: "recall.RecallIndex | None" = None,
 ) -> list[dict]:
     """给一组需求召回相关代码。
 
@@ -75,11 +76,20 @@ def recall_for_group(
         line = min(lines)
         snippets.append(_read_snippet(code_root, file, line, context))
 
-    if not snippets:
-        # 一条锚点都没有：用组名里的英文词去文件名里碰一碰
-        guess = _guess_files(items, index)
-        for file in guess[:max_files]:
-            snippets.append(_read_snippet(code_root, file, 1, context))
+    # 锚点不够时，用 BM25 按"需求文字 ↔ 代码注释/标识符"补召回。
+    # 纯中文需求抽不出标识符，这一步是关键兜底。
+    if corpus is not None and len(snippets) < max_files:
+        seen = {s["file"] for s in snippets}
+        query = " ".join(
+            f"{it.get('assertion', '')} {it.get('text', '')}" for it in items
+        )
+        for hit in corpus.search(query, top_k=max_files, min_ratio=0.3):
+            if hit["file"] in seen:
+                continue
+            snippets.append(_read_snippet(code_root, hit["file"], hit["line"], context))
+            seen.add(hit["file"])
+            if len(snippets) >= max_files:
+                break
 
     return [s for s in snippets if s["code"]]
 
@@ -95,30 +105,6 @@ def _read_snippet(code_root: Path, rel: str, center: int, context: int) -> dict:
     start = max(1, end - context)
     body = "\n".join(f"{i}\t{lines[i - 1]}" for i in range(start, end + 1))
     return {"file": rel, "start": start, "end": end, "code": body}
-
-
-def _guess_files(items: list[dict], index: CodeIndex, limit: int = 5) -> list[str]:
-    """没有锚点时，靠组名里的英文标识去索引的表里碰。"""
-    words: list[str] = []
-    for item in items:
-        for token in re.findall(r"[A-Za-z_][A-Za-z0-9_]{3,}", item.get("assertion", "")):
-            words.append(token.lower())
-    if not words:
-        return []
-
-    scored: dict[str, int] = {}
-    for table in (index.types, index.methods, index.fields, index.urls):
-        for key, entries in table.items():
-            low = key.lower()
-            score = sum(1 for w in words if w in low)
-            if score <= 0:
-                continue
-            for e in entries[:1]:
-                f = e.get("file")
-                if f:
-                    scored[f] = max(scored.get(f, 0), score)
-
-    return [f for f, _ in sorted(scored.items(), key=lambda kv: -kv[1])[:limit]]
 
 
 # ---------------------------------------------------------------- 任务包
@@ -152,10 +138,13 @@ def build_task_packages(
 
     task_dir = work_dir / TASK_DIR_NAME
     task_dir.mkdir(parents=True, exist_ok=True)
+    corpus = recall.RecallIndex.from_code_index(index)
 
     written: list[Path] = []
     for n, batch in enumerate(batches, start=1):
-        snippets = recall_for_group(batch, static_by_id, index, code_root, None)
+        snippets = recall_for_group(
+            batch, static_by_id, index, code_root, None, corpus=corpus
+        )
         used = 0
         kept: list[dict] = []
         for s in snippets:

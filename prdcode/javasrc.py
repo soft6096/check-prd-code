@@ -41,9 +41,13 @@ MAPPING_ANNOTATIONS = {
 
 # ---------------------------------------------------------------- 词法分析
 
-def tokenize(src: str) -> list[Token]:
-    """把 Java 源码切成 token；注释、字符串、字符都按各自规则吃掉。"""
+def _scan(src: str) -> tuple[list[Token], list[tuple[str, int, int]]]:
+    """切 token，同时把注释单独收起来（形如 ``(文本, 起, 止)``）。
+
+    注释不参与结构解析，但 Javadoc 要拿来做语义召回，所以顺手留下。
+    """
     tokens: list[Token] = []
+    comments: list[tuple[str, int, int]] = []
     i, n = 0, len(src)
     while i < n:
         c = src[i]
@@ -56,10 +60,14 @@ def tokenize(src: str) -> list[Token]:
             nxt = src[i + 1]
             if nxt == "/":
                 j = src.find("\n", i)
+                end = n if j < 0 else j
+                comments.append((_clean_comment(src[i + 2 : end]), i, end))
                 i = n if j < 0 else j + 1
                 continue
             if nxt == "*":
                 j = src.find("*/", i + 2)
+                end = n if j < 0 else j
+                comments.append((_clean_comment(src[i + 2 : end]), i, end))
                 i = n if j < 0 else j + 2
                 continue
 
@@ -124,7 +132,18 @@ def tokenize(src: str) -> list[Token]:
         if c in _OP_CHARS:
             tokens.append(("op", c, i))
         i += 1
-    return tokens
+    return tokens, comments
+
+
+def tokenize(src: str) -> list[Token]:
+    """把 Java 源码切成 token（不含注释）。"""
+    return _scan(src)[0]
+
+
+def _clean_comment(raw: str) -> str:
+    """把注释体压成一行纯文本（去掉每行行首的 ``*`` 和多余空白）。"""
+    parts = [ln.strip().lstrip("*").strip() for ln in raw.splitlines()]
+    return " ".join(p for p in parts if p)
 
 
 class _Lines:
@@ -272,6 +291,26 @@ def _declaration_start(toks: list[Token], i: int) -> int:
     return 0
 
 
+def _docs_by_token(
+    toks: list[Token], comments: list[tuple[str, int, int]]
+) -> dict[int, str]:
+    """把每条注释挂到它后面紧邻的那个 token 上，便于取声明的 Javadoc。
+
+    多条注释连着写时，离声明最近的那条胜出。
+    """
+    docs: dict[int, str] = {}
+    if not comments:
+        return docs
+    positions = [t[2] for t in toks]
+    for text, _start, end in comments:
+        if not text:
+            continue
+        j = bisect_right(positions, end)
+        if j < len(toks):
+            docs[j] = text
+    return docs
+
+
 def _extract_annotations(
     toks: list[Token], start: int, end: int
 ) -> list[tuple[str, list[str]]]:
@@ -385,6 +424,7 @@ def _scan_members(
     start: int,
     end: int,
     is_enum: bool,
+    docs: dict[int, str],
 ) -> None:
     """扫一个类型体 [start, end)：登记方法、字段、枚举常量。"""
     pending = start          # 当前成员声明的起点
@@ -414,7 +454,9 @@ def _scan_members(
             else:
                 sig = _method_signature(seg)
                 if sig:
-                    _add_method(syms, lines, owner, sig, close, seg, toks)
+                    _add_method(
+                        syms, lines, owner, sig, close, seg, toks, docs.get(pending, "")
+                    )
                     pending = close + 1
                 elif _has_op(seg, "="):
                     pass                     # 字段初始化块，等它的 ;
@@ -437,7 +479,9 @@ def _scan_members(
             elif not _has_type_keyword(seg):
                 sig = _method_signature(seg)
                 if sig:
-                    _add_method(syms, lines, owner, sig, j, seg, toks)
+                    _add_method(
+                        syms, lines, owner, sig, j, seg, toks, docs.get(pending, "")
+                    )
                 else:
                     for name, pos in _field_names(seg):
                         syms.fields.append(
@@ -458,6 +502,7 @@ def _add_method(
     close: int,
     seg: list[Token],
     toks: list[Token],
+    doc: str,
 ) -> None:
     name, pos = sig
     syms.methods.append(
@@ -467,6 +512,7 @@ def _add_method(
             "line": lines.line(pos),
             "end_line": lines.line(toks[close][2]),
             "annotations": _extract_annotations(seg, 0, len(seg)),
+            "doc": doc,
         }
     )
 
@@ -475,8 +521,9 @@ def _add_method(
 
 def parse_java(src: str) -> JavaSymbols:
     """解析一个 java 源文件，返回其中的类型/方法/字段/枚举常量。"""
-    toks = tokenize(src)
+    toks, comments = _scan(src)
     lines = _Lines(src)
+    docs = _docs_by_token(toks, comments)
     syms = JavaSymbols()
 
     n = len(toks)
@@ -488,17 +535,20 @@ def parse_java(src: str) -> JavaSymbols:
             body_open = _find_body_open(toks, i + 1)
             if body_open is not None:
                 body_close = _match(toks, body_open, "{", "}")
-                base_paths = _mapping_paths(toks, _declaration_start(toks, i), i)
+                decl_start = _declaration_start(toks, i)
+                base_paths = _mapping_paths(toks, decl_start, i)
                 syms.types.append(
                     {
                         "name": name_tok[1],
                         "kind": t,
                         "line": lines.line(name_tok[2]),
                         "base_paths": base_paths or [""],
+                        "doc": docs.get(decl_start, ""),
                     }
                 )
                 _scan_members(
-                    toks, lines, syms, name_tok[1], body_open + 1, body_close, t == "enum"
+                    toks, lines, syms, name_tok[1], body_open + 1, body_close,
+                    t == "enum", docs,
                 )
                 i = body_open + 1
                 continue

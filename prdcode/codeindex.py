@@ -206,7 +206,13 @@ def parse_java_file(path: Path, rel: str, index: CodeIndex) -> None:
     for t in syms.types:
         index.add_type(
             t["name"],
-            {"file": rel, "line": t["line"], "kind": t["kind"], "name": t["name"]},
+            {
+                "file": rel,
+                "line": t["line"],
+                "kind": t["kind"],
+                "name": t["name"],
+                "doc": t.get("doc", ""),
+            },
         )
     for m in syms.methods:
         index.add_method(
@@ -216,6 +222,7 @@ def parse_java_file(path: Path, rel: str, index: CodeIndex) -> None:
                 "line": m["line"],
                 "end_line": m["end_line"],
                 "owner": m["owner"],
+                "doc": m.get("doc", ""),
             },
         )
         _register_urls(index, m, owner_bases.get(m["owner"]) or [""], rel)
