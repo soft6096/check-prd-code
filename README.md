@@ -126,6 +126,7 @@ SKILL.md               给 AI 看的操作说明
 install.sh             安装脚本（整目录软链进 skills 目录）
 prdcode/               实现
   prd.py               PRD 切块
+  javasrc.py           Java 词法分析 + 结构化解析（纯标准库，不依赖 AST 库）
   codeindex.py         代码索引（Java / MyBatis XML）
   matcher.py           标识符抽取 + 静态判定 + 搜查记录
   tasks.py             AI 任务包、结果回收、引用验真

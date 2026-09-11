@@ -16,7 +16,7 @@ import re
 from pathlib import Path
 
 from .codeindex import CodeIndex
-from .utils import norm_ws, read_json, read_text, write_json, write_text
+from .utils import norm_ws, read_json, read_text, resolve_within, write_json, write_text
 
 TASK_DIR_NAME = "tasks"
 RESULT_DIR_NAME = "results"
@@ -85,8 +85,8 @@ def recall_for_group(
 
 
 def _read_snippet(code_root: Path, rel: str, center: int, context: int) -> dict:
-    path = code_root / rel
-    if not path.exists():
+    path = resolve_within(code_root, rel)
+    if path is None or not path.exists():
         return {"file": rel, "start": 0, "end": 0, "code": ""}
     text = read_text(path)
     lines = text.splitlines()
@@ -345,7 +345,10 @@ def verify_evidence(evidence: list[dict], code_root: Path) -> list[str]:
             problems.append(f"{file}:{line} 的引用是空的")
             continue
 
-        target = code_root / file
+        target = resolve_within(code_root, file)
+        if target is None:
+            problems.append(f"引用的路径越界：{file}")
+            continue
         if not target.exists():
             problems.append(f"引用的文件不存在：{file}")
             continue

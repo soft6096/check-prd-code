@@ -15,9 +15,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from prdcode import matcher, reverse, tasks
-from prdcode.codeindex import CodeIndex, _extract_paths
-from prdcode.utils import ERROR_CODE_RE
+from prdcode import javasrc, matcher, reverse, tasks
+from prdcode.codeindex import CodeIndex
+from prdcode.utils import ERROR_CODE_RE, resolve_within
 
 
 class TestFindUrlMethodFilter(unittest.TestCase):
@@ -60,11 +60,66 @@ class TestMultiPathAnnotation(unittest.TestCase):
     """bug3：一个注解写多个路径要全部登记。"""
 
     def test_two_paths(self) -> None:
-        self.assertEqual(_extract_paths('@RequestMapping({"/a", "/b"})'), ["/a", "/b"])
+        syms = javasrc.parse_java('@RequestMapping({"/a", "/b"}) class C { }')
+        self.assertEqual(syms.types[0]["base_paths"], ["/a", "/b"])
 
     def test_non_path_string_ignored(self) -> None:
-        got = _extract_paths('@RequestMapping(value="/a", produces="application/json")')
-        self.assertEqual(got, ["/a"])
+        syms = javasrc.parse_java(
+            '@RequestMapping(value="/a", produces="application/json") class C { }'
+        )
+        self.assertEqual(syms.types[0]["base_paths"], ["/a"])
+
+
+class TestJavaParser(unittest.TestCase):
+    """token 化解析器：字段多声明符、初始化块、枚举常量的边界。"""
+
+    SRC = """
+    public class T {
+        private int a, b, c = 3;
+        private static final Map<String, List<Integer>> CACHE = new HashMap<>();
+        private Runnable task = () -> { doIt(); };
+        private Comparator<String> cmp = new Comparator<String>() {
+            @Override public int compare(String x, String y) { return 0; }
+        };
+        static { init(); }
+        { init(); }
+        public T() { this.a = 1; }
+        public <X extends Comparable<X>> List<X> sort(List<X> in) { return in; }
+        interface Inner { void run(); }
+        enum Status { NEW, DONE; }
+        void doIt() {}
+        void init() {}
+    }
+    """
+
+    def setUp(self) -> None:
+        self.syms = javasrc.parse_java(self.SRC)
+
+    def test_types(self) -> None:
+        names = {t["name"] for t in self.syms.types}
+        self.assertEqual(names, {"T", "Inner", "Status"})
+
+    def test_multi_declarator_fields(self) -> None:
+        names = {f["name"] for f in self.syms.fields}
+        for expected in ("a", "b", "c", "CACHE", "task", "cmp"):
+            self.assertIn(expected, names)
+
+    def test_enum_constants(self) -> None:
+        names = {e["name"] for e in self.syms.enum_constants}
+        self.assertEqual(names, {"NEW", "DONE"})
+
+    def test_methods(self) -> None:
+        # 匿名类里的方法（如 Comparator.compare）不属于类的对外 API，不索引
+        names = {m["name"] for m in self.syms.methods}
+        for expected in ("T", "sort", "doIt", "init", "run"):
+            self.assertIn(expected, names)
+
+    def test_comment_and_string_do_not_leak(self) -> None:
+        syms = javasrc.parse_java(
+            'class C { /* int ghost; */ String s = "int fake;"; void real() {} }'
+        )
+        self.assertEqual({f["name"] for f in syms.fields}, {"s"})
+        self.assertEqual({m["name"] for m in syms.methods}, {"real"})
 
 
 class TestMethodCallExtraction(unittest.TestCase):
@@ -125,6 +180,26 @@ class TestMergeCarriesChecks(unittest.TestCase):
         }]
         merged = tasks.merge_results(items, static, {}, None)
         self.assertIn("checks", merged[0])
+
+
+class TestPathSandbox(unittest.TestCase):
+    """AI 给的引用路径不能越出 code_root。"""
+
+    def setUp(self) -> None:
+        self.root = ROOT
+
+    def test_resolve_within_blocks_escape(self) -> None:
+        self.assertIsNone(resolve_within(self.root, "../../etc/passwd"))
+        self.assertIsNone(resolve_within(self.root, "/etc/passwd"))
+
+    def test_resolve_within_allows_inside(self) -> None:
+        self.assertIsNotNone(resolve_within(self.root, "README.md"))
+
+    def test_verify_evidence_flags_escape(self) -> None:
+        problems = tasks.verify_evidence(
+            [{"file": "../../etc/passwd", "line": 1, "quote": "root"}], self.root
+        )
+        self.assertTrue(any("越界" in p for p in problems))
 
 
 if __name__ == "__main__":

@@ -16,7 +16,7 @@ import random
 from pathlib import Path
 
 from .tasks import classify
-from .utils import read_text, write_text
+from .utils import read_text, resolve_within, write_text
 
 FIX_NAME = "01-待修复.md"
 CONFIRM_NAME = "02-待确认.md"
@@ -414,8 +414,8 @@ def _snippet_from_evidence(
             quote = (ev.get("quote") or "").strip()
             if quote:
                 return quote
-        path = code_root / ev["file"]
-        if not path.exists():
+        path = resolve_within(code_root, ev["file"])
+        if path is None or not path.exists():
             continue
         lines = read_text(path).splitlines()
         try:
@@ -454,8 +454,8 @@ def _evidence_text(ev: dict, code_root: Path) -> str:
     quote = (ev.get("quote") or "").strip()
     if quote:
         return quote
-    path = code_root / (ev.get("file") or "")
-    if not path.exists():
+    path = resolve_within(code_root, ev.get("file") or "")
+    if path is None or not path.exists():
         return ""
     text = read_text(path)
     lines = text.splitlines()

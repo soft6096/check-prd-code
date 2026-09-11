@@ -6,10 +6,8 @@
 哪个文件、第几行、什么类型、什么方法、什么接口、什么字段、什么枚举值。
 不做任何判断，判断在后面的模块里做。
 
-解析策略（不依赖任何第三方库）：
-  1. 先把注释和字符串抹成空格（行号不变），避免注释里的花括号扰乱配对
-  2. 预计算花括号配对表，一次 O(n) 扫描，后续 O(1) 查询
-  3. 沿着花括号深度走，深度 1 处遇到的就是类的成员
+Java 结构解析交给 javasrc（自带词法分析器，不再用正则套原文）；
+本模块负责把解析结果装进索引，外加 MyBatis XML 的语句 id。
 """
 
 from __future__ import annotations
@@ -18,80 +16,17 @@ import re
 from pathlib import Path
 from typing import Iterable
 
-from .utils import (
-    ERROR_CODE_RE,
-    pos_to_line,
-    read_text,
-    strip_comments_keep_lines,
-)
+from .javasrc import MAPPING_ANNOTATIONS, parse_java
+from .utils import ERROR_CODE_RE, pos_to_line, read_text
 
 CODE_EXTS = (".java",)
 XML_EXTS = (".xml",)
 
-# 类 / 接口 / 枚举 / record 声明
-_TYPE_RE = re.compile(r"\b(class|interface|enum|record)\s+([A-Za-z_]\w*)")
-# 注解（带括号那种）
-_ANN_CALL_RE = re.compile(r"@([A-Za-z_]\w*)\s*\(")
-# 注解（不带括号，如 @Override）
-_ANN_BARE_RE = re.compile(r"@([A-Za-z_]\w*)")
-# 注解里引号包着的字符串（在原始文本上匹配）
-_ANN_STR_RE = re.compile(r'"([^"]*)"')
-# 标识符
-_IDENT_RE = re.compile(r"[A-Za-z_]\w*")
-# 枚举常量
-_ENUM_CONST_RE = re.compile(r"^\s*([A-Z][A-Z0-9_]*)\s*(?:\(|,|;|$)")
-# 错误码正则与判定端共用同一条（见 utils.ERROR_CODE_RE），
-# 两边不一致会让需求里的错误码永远搜不到，被误判成"没做"。
 # MyBatis XML
 _XML_NS_RE = re.compile(r"<mapper[^>]*\bnamespace\s*=\s*\"([^\"]+)\"")
 _XML_STMT_RE = re.compile(
     r"<(select|insert|update|delete)\b[^>]*\bid\s*=\s*\"([^\"]+)\"", re.I
 )
-
-# HTTP 注解 → 方法
-MAPPING_ANNOTATIONS = {
-    "RequestMapping": None,
-    "GetMapping": "GET",
-    "PostMapping": "POST",
-    "PutMapping": "PUT",
-    "DeleteMapping": "DELETE",
-    "PatchMapping": "PATCH",
-}
-
-# 这些不是方法名，扫成员时要排掉
-_NOT_METHOD = {
-    "if", "for", "while", "switch", "catch", "synchronized", "try", "do",
-    "return", "new", "super", "this", "assert",
-}
-
-
-# ---------------------------------------------------------------- 花括号配对
-
-def build_brace_map(sane: str) -> dict[int, int]:
-    """一次扫描，算出所有 ``{`` 到 ``}`` 的配对关系。"""
-    pairs: dict[int, int] = {}
-    stack: list[int] = []
-    for i, ch in enumerate(sane):
-        if ch == "{":
-            stack.append(i)
-        elif ch == "}":
-            if stack:
-                pairs[stack.pop()] = i
-    return pairs
-
-
-def match_paren(sane: str, open_pos: int) -> int:
-    """给一个 ``(`` 的位置，返回配对 ``)`` 的位置。"""
-    depth = 0
-    for i in range(open_pos, len(sane)):
-        ch = sane[i]
-        if ch == "(":
-            depth += 1
-        elif ch == ")":
-            depth -= 1
-            if depth == 0:
-                return i
-    return -1
 
 
 # ---------------------------------------------------------------- 索引容器
@@ -264,198 +199,47 @@ def collect_code_files(
 def parse_java_file(path: Path, rel: str, index: CodeIndex) -> None:
     """解析一个 java 文件，把发现的符号写进索引。"""
     raw = read_text(path)
-    sane = strip_comments_keep_lines(raw)
-    pairs = build_brace_map(sane)
+    syms = parse_java(raw)
+    owner_bases = {t["name"]: (t["base_paths"] or [""]) for t in syms.types}
 
-    for m in _TYPE_RE.finditer(sane):
-        kind = m.group(1)
-        name = m.group(2)
-        brace = sane.find("{", m.end())
-        if brace < 0:
-            continue
-        line = pos_to_line(raw, m.start())
+    for t in syms.types:
         index.add_type(
-            name,
-            {"file": rel, "line": line, "kind": kind, "name": name},
+            t["name"],
+            {"file": rel, "line": t["line"], "kind": t["kind"], "name": t["name"]},
         )
-        # 类级注解（在 class 关键字之前的一段）
-        head_start = _declaration_start(sane, m.start())
-        class_head = raw[head_start : m.start()]
-        base_paths = _extract_paths(class_head) or [""]
-        _scan_members(
-            raw, sane, pairs, brace, name, rel, index, base_paths,
-            is_enum=(kind == "enum"), is_interface=(kind == "interface"),
+    for m in syms.methods:
+        index.add_method(
+            m["name"],
+            {
+                "file": rel,
+                "line": m["line"],
+                "end_line": m["end_line"],
+                "owner": m["owner"],
+            },
+        )
+        _register_urls(index, m, owner_bases.get(m["owner"]) or [""], rel)
+    for f in syms.fields:
+        index.add_field(
+            f["name"], {"file": rel, "line": f["line"], "owner": f["owner"]}
+        )
+    for e in syms.enum_constants:
+        index.add_enum_constant(
+            e["name"], {"file": rel, "line": e["line"], "owner": e["owner"]}
         )
 
     _scan_error_codes(raw, rel, index)
 
 
-def _declaration_start(sane: str, pos: int, lookback: int = 600) -> int:
-    """往左找到这个声明的起点（上一个 ; { } 之后），用于取注解。"""
-    start = max(0, pos - lookback)
-    seg = sane[start:pos]
-    cut = max(seg.rfind(";"), seg.rfind("}"), seg.rfind("{"))
-    return start + cut + 1 if cut >= 0 else start
-
-
-def _extract_paths(segment: str) -> list[str]:
-    """从一段声明头里抽出**所有**映射路径。
-
-    一个注解可以一次写多个路径（``@RequestMapping({"/a", "/b"})``），
-    只取第一个会漏掉其余路径。只认以 ``/`` 开头的字符串，避开
-    ``produces = "application/json"`` 这类非路径参数。
-    """
-    paths: list[str] = []
-    for m in _ANN_CALL_RE.finditer(segment):
-        ann = m.group(1)
-        if ann not in MAPPING_ANNOTATIONS:
-            continue
-        open_paren = m.end() - 1
-        close = match_paren(segment, open_paren)
-        if close < 0:
-            continue
-        args = segment[open_paren + 1 : close]
-        paths.extend(s for s in _ANN_STR_RE.findall(args) if s.startswith("/"))
-    return paths
-
-
-def _extract_annotations(segment: str) -> list[tuple[str, list[str]]]:
-    """抽一段文本里所有注解及其字符串参数。"""
-    out: list[tuple[str, list[str]]] = []
-    for m in _ANN_CALL_RE.finditer(segment):
-        ann = m.group(1)
-        open_paren = m.end() - 1
-        close = match_paren(segment, open_paren)
-        if close < 0:
-            continue
-        args = segment[open_paren + 1 : close]
-        out.append((ann, _ANN_STR_RE.findall(args)))
-    for m in _ANN_BARE_RE.finditer(segment):
-        if m.end() < len(segment) and segment[m.end() : m.end() + 1] == "(":
-            continue
-        out.append((m.group(1), []))
-    return out
-
-
-def _scan_members(
-    raw: str,
-    sane: str,
-    pairs: dict[int, int],
-    cls_open: int,
-    cls_name: str,
-    rel: str,
-    index: CodeIndex,
-    class_base_paths: list[str],
-    is_enum: bool = False,
-    is_interface: bool = False,
+def _register_urls(
+    index: CodeIndex, method: dict, bases: list[str], rel: str
 ) -> None:
-    """扫类体：把方法、字段、枚举常量登记进索引。"""
-    cls_close = pairs.get(cls_open, len(sane))
-    i = cls_open + 1
-    last = cls_open + 1          # 上一个成员结束后的位置
-    paren_depth = 0
-
-    while i < cls_close:
-        ch = sane[i]
-
-        if ch == "(":
-            paren_depth += 1
-            i += 1
-            continue
-        if ch == ")":
-            paren_depth = max(0, paren_depth - 1)
-            i += 1
-            continue
-
-        if paren_depth != 0:
-            i += 1
-            continue
-
-        # ---- 方法体 / 初始化块 ----
-        if ch == "{":
-            head = sane[last:i]
-            head_raw = raw[last:i]
-            body_end = pairs.get(i, i)
-            name = _method_name(head)
-            if name and name not in _NOT_METHOD:
-                line = pos_to_line(raw, last + _first_code_offset(head))
-                _register_method(
-                    index, name, cls_name, rel, line,
-                    pos_to_line(raw, body_end), head_raw, class_base_paths,
-                )
-            i = body_end + 1
-            last = i
-            continue
-
-        # ---- 成员声明结束（字段、抽象方法） ----
-        if ch == ";":
-            decl = sane[last:i]
-            decl_raw = raw[last:i]
-            line = pos_to_line(raw, last + _first_code_offset(decl))
-            name = _method_name(decl)
-            if name and name not in _NOT_METHOD and "(" in decl:
-                # 接口里的抽象方法：没有方法体，以 ; 结尾
-                _register_method(
-                    index, name, cls_name, rel, line, line,
-                    decl_raw, class_base_paths,
-                )
-            else:
-                field = _field_name(decl)
-                if field:
-                    index.add_field(
-                        field, {"file": rel, "line": line, "owner": cls_name}
-                    )
-            last = i + 1
-            i += 1
-            continue
-
-        # ---- 枚举常量 ----
-        if is_enum and ch == ",":
-            seg = sane[last:i]
-            m = _ENUM_CONST_RE.match(seg)
-            if m:
-                index.add_enum_constant(
-                    m.group(1),
-                    {"file": rel, "line": pos_to_line(raw, last), "owner": cls_name},
-                )
-                last = i + 1
-            i += 1
-            continue
-
-        i += 1
-
-
-def _register_method(
-    index: CodeIndex,
-    name: str,
-    cls_name: str,
-    rel: str,
-    line: int,
-    end_line: int,
-    head_raw: str,
-    class_base_paths: list[str],
-) -> None:
-    """登记一个方法；如果是 HTTP 入口，顺手登记 URL。
-
-    类上可能一次写了多个基础路径，方法上也可能写多个子路径，
-    两者做笛卡尔积，保证每个组合都被登记。
-    """
-    index.add_method(
-        name,
-        {
-            "file": rel,
-            "line": line,
-            "end_line": end_line,
-            "owner": cls_name,
-        },
-    )
-
-    for ann, args in _extract_annotations(head_raw):
+    """把方法的映射注解登记成接口：类上多个基础路径 × 方法上多个子路径。"""
+    for ann, args in method.get("annotations", []):
         if ann not in MAPPING_ANNOTATIONS:
             continue
         http = MAPPING_ANNOTATIONS[ann]
         sub_paths = [a for a in args if a.startswith("/")] or [""]
-        for base in class_base_paths or [""]:
+        for base in bases or [""]:
             for sub in sub_paths:
                 full = _join_path(base, sub)
                 key = f"{http or 'ANY'} {full}"
@@ -463,9 +247,9 @@ def _register_method(
                     key,
                     {
                         "file": rel,
-                        "line": line,
-                        "handler": name,
-                        "owner": cls_name,
+                        "line": method["line"],
+                        "handler": method["name"],
+                        "owner": method["owner"],
                         "http": http or "ANY",
                     },
                 )
@@ -481,67 +265,6 @@ def _join_path(base: str, sub: str) -> str:
     if not s:
         return b if b.startswith("/") else "/" + b
     return (b.rstrip("/") + "/" + s.lstrip("/"))
-
-
-def _first_code_offset(head: str) -> int:
-    """跳过声明头里的空白与注解，返回第一段实际代码的下标。"""
-    i = 0
-    n = len(head)
-    while i < n:
-        ch = head[i]
-        if ch in " \t\r\n":
-            i += 1
-            continue
-        if ch == "@":
-            m = _ANN_CALL_RE.match(head, i)
-            if m:
-                close = match_paren(head, m.end() - 1)
-                if close > 0:
-                    i = close + 1
-                    continue
-            m = _ANN_BARE_RE.match(head, i)
-            if m:
-                i = m.end()
-                continue
-        break
-    return i
-
-
-def _method_name(head: str) -> str:
-    """从声明头里取方法名。
-
-    注意要把前面的注解跳掉 —— ``@PostMapping("/apply")`` 里那个括号
-    比方法签名先出现，直接找第一个 ``(`` 会取成 ``PostMapping``。
-    """
-    offset = _first_code_offset(head)
-    body = head[offset:]
-    open_paren = body.find("(")
-    if open_paren <= 0:
-        return ""
-    prefix = body[:open_paren]
-    if "=" in prefix.split("\n")[-1]:
-        # 形如 ``private int x = compute(``，是字段初始化，不是方法
-        return ""
-    names = _IDENT_RE.findall(prefix)
-    if not names:
-        return ""
-    candidate = names[-1]
-    if candidate in _NOT_METHOD:
-        return ""
-    return candidate
-
-
-def _field_name(decl: str) -> str:
-    """从字段声明里取字段名。同样要先跳过注解。"""
-    offset = _first_code_offset(decl)
-    body = decl[offset:]
-    if "(" in body:
-        return ""
-    before_eq = body.split("=")[0]
-    names = _IDENT_RE.findall(before_eq)
-    if len(names) < 2:
-        return ""
-    return names[-1]
 
 
 def _scan_error_codes(raw: str, rel: str, index: CodeIndex) -> None:
