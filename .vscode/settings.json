@@ -1,0 +1,11 @@
+{
+  "java.import.exclusions": [
+    "**/examples/**"
+  ],
+  "files.exclude": {
+    "**/examples/code": true
+  },
+  "search.exclude": {
+    "**/examples/code": true
+  }
+}
