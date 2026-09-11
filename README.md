@@ -100,11 +100,30 @@ Python 3.8+，**只用标准库**，不需要 `pip install`。
 - 需求文档没写到的功能，不算「没做」
 - 需求本身写错的地方，工具会以需求为准（它不知道需求是错的）
 
+## 安装
+
+这是一个 AI skill（`SKILL.md`）+ 命令行工具的组合。**要整目录安装** ——
+脚本与 `SKILL.md` 必须同目录，只软链 `SKILL.md` 会找不到脚本。
+
+```bash
+./install.sh                     # 自动挑选已存在的 skills 目录
+./install.sh ~/.claude/skills    # 或显式指定目标目录
+
+# 等价的手动方式：整目录软链
+ln -s "$(pwd)" ~/.agents/skills/check-prd-code
+```
+
+常见的 skills 目录：`~/.agents/skills`、`~/.config/opencode/skills`、
+`~/.claude/skills`、`~/.codebuddy/skills`。装好后，说「核对需求和代码」这类话会自动触发。
+
+不装 skill 也能用：直接按下面「试着跑一下」在仓库里跑三步即可。
+
 ## 目录
 
 ```
 check_prd_code.py      命令行入口
 SKILL.md               给 AI 看的操作说明
+install.sh             安装脚本（整目录软链进 skills 目录）
 prdcode/               实现
   prd.py               PRD 切块
   codeindex.py         代码索引（Java / MyBatis XML）
@@ -116,6 +135,7 @@ prdcode/               实现
 templates/             报告与中间产物的格式参考
 examples/              一份能直接跑通的示例
 tests/                 回归测试
+.github/workflows/     CI（跑回归测试）
 ```
 
 ## 试着跑一下
