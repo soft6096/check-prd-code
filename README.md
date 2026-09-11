@@ -46,7 +46,18 @@ python3 check_prd_code.py status
 
 ### 依赖
 
-Python 3.8+，**只用标准库**，不需要 `pip install`。
+Python 3.9+，**只用标准库**，不需要 `pip install`。
+
+### 可选配置
+
+- **索引缓存**：`compare` 会按源码文件的 `mtime + size` 给索引做缓存；
+  源码没动过就直接复用，跳过重扫（缓存文件 `.checkprd/compare/index_cache.json`）。
+- **错误码位数**：默认按 5 位识别错误码。项目用别的位数时，加参数或设环境变量：
+
+  ```bash
+  python3 check_prd_code.py compare --code ./工程 --error-code-digits 4
+  export CHECKPRD_ERROR_CODE_DIGITS=4
+  ```
 
 ## 分工
 

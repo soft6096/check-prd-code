@@ -17,7 +17,7 @@ sys.path.insert(0, str(ROOT))
 
 from prdcode import javasrc, matcher, reverse, tasks
 from prdcode.codeindex import CodeIndex
-from prdcode.utils import ERROR_CODE_RE, resolve_within
+from prdcode.utils import error_code_regex, resolve_within
 
 
 class TestFindUrlMethodFilter(unittest.TestCase):
@@ -53,7 +53,7 @@ class TestErrorCodeRegex(unittest.TestCase):
         self.assertNotIn("4001", matcher.extract_identifiers("错误码 4001")["error_codes"])
 
     def test_shared_constant(self) -> None:
-        self.assertEqual(ERROR_CODE_RE.findall("41026"), ["41026"])
+        self.assertEqual(error_code_regex().findall("41026"), ["41026"])
 
 
 class TestMultiPathAnnotation(unittest.TestCase):

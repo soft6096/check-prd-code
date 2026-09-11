@@ -17,7 +17,7 @@ from __future__ import annotations
 import re
 
 from .codeindex import CodeIndex
-from .utils import ERROR_CODE_RE
+from .utils import find_error_codes
 
 # ---------------------------------------------------------------- 抽取规则
 
@@ -43,7 +43,7 @@ _METHOD_CALL_STOP = {
     "this", "assert", "do", "try", "synchronized", "else", "throw",
 }
 _METHOD_DOT_RE = re.compile(r"\b([A-Z]\w*)\.([a-z]\w*)")
-# 错误码正则与索引端共用同一条（见 utils.ERROR_CODE_RE），
+# 错误码正则与索引端共用同一条（见 utils.error_code_regex），
 # 两边不一致会让需求里的错误码永远搜不到，被误判成"没做"。
 # 枚举值：含下划线的大写常量（避免把普通大写词当枚举）
 _ENUM_RE = re.compile(r"\b([A-Z][A-Z0-9]*_[A-Z0-9_]+)\b")
@@ -86,7 +86,7 @@ def extract_identifiers(text: str) -> dict:
         methods.append(name)
     methods = _dedupe(methods)
 
-    codes = _dedupe(ERROR_CODE_RE.findall(ticked_text or haystack))
+    codes = _dedupe(find_error_codes(ticked_text or haystack))
     enums = _dedupe(_ENUM_RE.findall(haystack))
 
     fields: list[str] = []

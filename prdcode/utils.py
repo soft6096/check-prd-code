@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from pathlib import Path
 from typing import Any
@@ -82,10 +83,34 @@ def snippet_around(text: str, line_no: int, before: int = 2, after: int = 2) -> 
 
 # ---------------------------------------------------------------- 共用规则
 
-# 错误码：5 位、首位非 0。索引端（codeindex）和判定端（matcher）必须用同一条规则，
-# 否则需求里写的错误码在索引里永远搜不到，会被误判成"没做"。
-# 前后不允许紧挨字母/数字/点，避开小数、订单号这类数字。
-ERROR_CODE_RE = re.compile(r"(?<![\w.])([1-9]\d{4})(?![\w.])")
+# 错误码位数：默认 5 位（首位非 0）。索引端（codeindex）和判定端（matcher）
+# 必须用同一条规则，否则需求里写的错误码在索引里永远搜不到，会被误判成"没做"。
+# 项目用别的位数时，用环境变量 CHECKPRD_ERROR_CODE_DIGITS 覆盖。
+_DEFAULT_ERROR_CODE_DIGITS = 5
+_error_code_regex_cache: dict[int, re.Pattern] = {}
+
+
+def error_code_digits() -> int:
+    """当前生效的错误码位数（环境变量优先，默认 5）。"""
+    raw = os.environ.get("CHECKPRD_ERROR_CODE_DIGITS", "")
+    if raw.isdigit() and int(raw) > 0:
+        return int(raw)
+    return _DEFAULT_ERROR_CODE_DIGITS
+
+
+def error_code_regex() -> re.Pattern:
+    """按当前位数生成错误码正则（按位数缓存）。"""
+    digits = error_code_digits()
+    cached = _error_code_regex_cache.get(digits)
+    if cached is None:
+        cached = re.compile(rf"(?<![\w.])([1-9]\d{{{digits - 1}}})(?![\w.])")
+        _error_code_regex_cache[digits] = cached
+    return cached
+
+
+def find_error_codes(text: str) -> list[str]:
+    """从一段文字里抽出错误码。"""
+    return error_code_regex().findall(text)
 
 
 # ---------------------------------------------------------------- 路径安全

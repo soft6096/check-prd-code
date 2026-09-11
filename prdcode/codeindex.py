@@ -12,12 +12,13 @@ Java 结构解析交给 javasrc（自带词法分析器，不再用正则套原�
 
 from __future__ import annotations
 
+import hashlib
 import re
 from pathlib import Path
 from typing import Iterable
 
 from .javasrc import MAPPING_ANNOTATIONS, parse_java
-from .utils import ERROR_CODE_RE, pos_to_line, read_text
+from .utils import error_code_regex, pos_to_line, read_json, read_text, write_json
 
 CODE_EXTS = (".java",)
 XML_EXTS = (".xml",)
@@ -268,8 +269,8 @@ def _join_path(base: str, sub: str) -> str:
 
 
 def _scan_error_codes(raw: str, rel: str, index: CodeIndex) -> None:
-    """登记文件里出现的错误码（与判定端共用 utils.ERROR_CODE_RE）。"""
-    for m in ERROR_CODE_RE.finditer(raw):
+    """登记文件里出现的错误码（与判定端共用 utils 的错误码规则）。"""
+    for m in error_code_regex().finditer(raw):
         code = m.group(1)
         index.add_error_code(code, {"file": rel, "line": pos_to_line(raw, m.start())})
 
@@ -335,6 +336,55 @@ def build_index(
             continue
 
     return index
+
+
+def source_fingerprint(
+    roots: Iterable[str | Path],
+    base: Path | None = None,
+    skip_dirs: Iterable[str] = ("target", "build", "out", "node_modules", ".git", "test"),
+) -> str:
+    """把参与索引的源码文件的 (相对路径, mtime, size) 拼成一个指纹。
+
+    指纹没变，说明源码一个字都没动，可以直接复用上次的索引。
+    """
+    files = collect_code_files(roots, CODE_EXTS, skip_dirs) + collect_code_files(
+        roots, XML_EXTS, skip_dirs
+    )
+    parts: list[str] = []
+    for path in sorted(files, key=lambda p: str(p)):
+        try:
+            st = path.stat()
+        except OSError:
+            continue
+        parts.append(f"{_rel(path, base)}:{st.st_mtime_ns}:{st.st_size}")
+    return hashlib.sha1("\n".join(parts).encode("utf-8")).hexdigest()
+
+
+def build_index_cached(
+    roots: Iterable[str | Path],
+    base: Path | None = None,
+    cache_path: str | Path | None = None,
+    progress=None,
+    skip_dirs: Iterable[str] = ("target", "build", "out", "node_modules", ".git", "test"),
+) -> tuple[CodeIndex, bool]:
+    """带缓存的建索引：源码指纹没变就复用 ``cache_path`` 里的旧索引。
+
+    返回 ``(索引, 是否命中缓存)``。指纹对不上就重扫并刷新缓存。
+    """
+    fingerprint = source_fingerprint(roots, base, skip_dirs)
+    if cache_path is not None and Path(cache_path).exists():
+        data = read_json(cache_path)
+        if (
+            isinstance(data, dict)
+            and data.get("fingerprint") == fingerprint
+            and isinstance(data.get("index"), dict)
+        ):
+            return CodeIndex.from_dict(data["index"]), True
+
+    index = build_index(roots, base=base, progress=progress, skip_dirs=skip_dirs)
+    if cache_path is not None:
+        write_json(cache_path, {"fingerprint": fingerprint, "index": index.to_dict()})
+    return index, False
 
 
 def _rel(path: Path, base: Path | None) -> str:

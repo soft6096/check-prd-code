@@ -23,6 +23,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -207,13 +208,22 @@ def cmd_compare(args: argparse.Namespace) -> None:
     stage_dir = work / STAGE_COMPARE
     progress = Progress(stage_dir, STAGE_COMPARE, total_steps=4)
 
+    # 错误码位数：命令行优先，其次环境变量（utils 里读取）
+    if getattr(args, "error_code_digits", None):
+        os.environ["CHECKPRD_ERROR_CODE_DIGITS"] = str(args.error_code_digits)
+
     progress.begin("读取需求条目")
     progress.ok(f"{len(items)} 条")
 
     progress.begin("建立代码索引")
-    index = codeindex.build_index([code_root], base=code_root, progress=progress)
+    index, cached = codeindex.build_index_cached(
+        [code_root],
+        base=code_root,
+        cache_path=stage_dir / "index_cache.json",
+        progress=progress,
+    )
     write_json(stage_dir / "index.json", index.to_dict())
-    progress.ok(codeindex.index_summary(index))
+    progress.ok(("缓存命中，" if cached else "") + codeindex.index_summary(index))
 
     progress.begin("静态判定")
     static_results = [matcher.judge_static(item, index) for item in items]
@@ -331,6 +341,12 @@ def build_parser() -> argparse.ArgumentParser:
     p2 = sub.add_parser("compare", help="第二步：建索引、静态判定、生成 AI 任务包")
     p2.add_argument("--code", required=True, help="代码根目录")
     p2.add_argument("--work", default=WORK_DIR_NAME, help="中间产物目录")
+    p2.add_argument(
+        "--error-code-digits",
+        type=int,
+        default=None,
+        help="错误码位数（默认 5，也可用环境变量 CHECKPRD_ERROR_CODE_DIGITS）",
+    )
     p2.set_defaults(func=cmd_compare)
 
     p3 = sub.add_parser("report", help="第三步：验真、合并、出报告")
