@@ -127,7 +127,7 @@ ln -s "$(pwd)" ~/.agents/skills/check-prd-code
 常见的 skills 目录：`~/.agents/skills`、`~/.config/opencode/skills`、
 `~/.claude/skills`、`~/.codebuddy/skills`。装好后，说「核对需求和代码」这类话会自动触发。
 
-不装 skill 也能用：直接按下面「试着跑一下」在仓库里跑三步即可。
+不装 skill 也能用：直接按上面「三步」在仓库里跑即可。
 
 ## 目录
 
@@ -145,20 +145,8 @@ prdcode/               实现
   report.py            报告渲染
   progress.py          进度显示
 templates/             报告与中间产物的格式参考
-examples/              一份能直接跑通的示例
 tests/                 回归测试
 .github/workflows/     CI（跑回归测试）
-```
-
-## 试着跑一下
-
-```bash
-cd examples
-python3 ../check_prd_code.py extract --prd 需求文档.md
-# 按 SKILL.md 让 AI 产出 items.json
-python3 ../check_prd_code.py compare --code ./code
-# 让 AI 处理 tasks/ 里的任务包
-python3 ../check_prd_code.py report --code ./code --out ./报告
 ```
 
 ## 测试

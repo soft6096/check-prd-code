@@ -20,7 +20,4 @@ Thumbs.db
 __pycache__/
 *.pyc
 .idea/
-# .vscode 默认不提交，但 settings.json 要提交（它负责让 VS Code 忽略示例里的
-# "故意不完整"的 Java 代码，属于仓库配置而非个人偏好）
-.vscode/*
-!.vscode/settings.json
+.vscode/
