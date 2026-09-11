@@ -145,32 +145,20 @@ def _print_extract_next(
     print()
 
     if pending_image > 0:
-        print(f"① 图片批（{pending_image} 个文件待处理，共 {len(plan['image'])} 个）")
-        print()
-        print(f"   >>> 请把模型切换到【能看图的模型】（多模态 / 视觉模型）")
-        print(f"       参考：GLM-5v-Turbo、GPT-4o、Claude Sonnet、Qwen-VL 等")
-        print(f"       判断标准：这个模型能不能直接读图片文件？")
-        print(f"       读不了就别用 —— 看不到图，模型只能照着标题瞎猜，条目全废。")
-        print()
+        print(f"① 图片批  {pending_image} 个文件")
+        print(f"   要读图 → 用多模态模型")
+        print(f"   推荐：GLM-5v-Turbo")
         print(f"   任务： {work_label}/任务/图片/")
         print(f"   产出： {work_label}/结果/图片批-*.json")
-        print(f"   注意：不是服务端的图（纯页面布局、前端交互、样式）直接跳过，")
-        print(f"         在 skipped.md 里记一行，别硬造条目")
         print()
 
     if pending_text > 0:
-        print(f"② 文本批（{pending_text} 个文件待处理，共 {len(plan['text'])} 个）")
-        print()
-        print(f"   >>> 请把模型切换到【便宜的文本模型】")
-        print(f"       参考：GLM-5.3-Flash、DeepSeek、GPT-4o-mini 等")
-        print(f"       这批是中文改写活 —— 量最大、也最简单，不值得用贵模型。")
-        print()
+        print(f"② 文本批  {pending_text} 个文件")
+        print(f"   纯文字 → 普通模型即可")
+        print(f"   推荐：DeepSeek")
         print(f"   任务： {work_label}/任务/文本/")
         print(f"   产出： {work_label}/结果/文本批-*.json")
         print()
-
-    print("   （这两批之间要各切一次模型；同一批内可以连着跑完）")
-    print()
 
     print("两批都写完之后，重跑同一条命令，结果会自动合并成 items.json：")
     print(f"    python3 check_prd_code.py extract --prd <同一个 PRD>")
@@ -359,7 +347,9 @@ def _render_extract_pack(
 # 读不完不是"慢一点"，是它会静默漏掉后半截。
 TEXT_BATCH_LINES = 1200
 TEXT_BATCH_BLOCKS = 60
-IMAGE_BATCH_BLOCKS = 18
+# 图片批按"张"算：一张原型图信息量顶几百行文字，一轮对话塞 18 张做不完，
+# 做不完又只能写半批结果，脚本还分不清"做完了"和"做了一半"。
+IMAGE_BATCH_BLOCKS = 6
 
 
 # 「总纲」性质的章节。后面每个页面都会引用它们定义的字段、字典、状态、规则。
